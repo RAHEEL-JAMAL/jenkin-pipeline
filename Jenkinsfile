@@ -64,7 +64,11 @@ pipeline {
 
                     def usedPorts = usedRaw ? usedRaw.split('\n').toList() : []
                     def port = 3000
-                    while (usedPorts.contains(port.toString())) { port++ }
+
+                    while (usedPorts.contains(port.toString())) {
+                        port++
+                    }
+
                     env.PORT = port.toString()
 
                     echo "[META] PORT=${env.PORT}"
@@ -89,9 +93,7 @@ pipeline {
         stage('Secret Scan') {
             steps {
                 script { echo '[STAGE_START] Secret Scan' }
-                sh '''
-                    echo "Scanning secrets..."
-                '''
+                sh 'echo "Scanning secrets..."'
                 script { echo '[STAGE_SUCCESS] Secret Scan' }
             }
         }
@@ -132,9 +134,17 @@ pipeline {
                     def df = '''
 FROM node:20-alpine
 WORKDIR /app
-COPY . .
+
+COPY package*.json ./
 RUN npm install
+
+COPY . .
+
 EXPOSE 3000
+
+ENV HOST=0.0.0.0
+ENV PORT=3000
+
 CMD ["node","index.js"]
 '''
 
@@ -182,80 +192,75 @@ CMD ["node","index.js"]
 
                         echo "Deploying on LOCAL VM"
 
-                        sh '''
-                            docker stop "${CONTAINER_NAME}" || true
-                            docker rm "${CONTAINER_NAME}" || true
-                            docker run -d --name "${CONTAINER_NAME}" -p "${PORT}:3000" "${IMAGE_NAME}"
-                        '''
+                        sh """
+                            docker stop ${CONTAINER_NAME} || true
+                            docker rm ${CONTAINER_NAME} || true
+
+                            docker run -d --name ${CONTAINER_NAME} \
+                            -p ${PORT}:3000 \
+                            -e PORT=3000 \
+                            -e HOST=0.0.0.0 \
+                            --restart unless-stopped \
+                            ${IMAGE_NAME}
+                        """
 
                         echo "[META] DEPLOYMENT=LOCAL_SUCCESS"
+                        echo "[META] URL=http://localhost:${PORT}"
                     }
 
-                   else if (params.DEPLOY_MODE == 'aws') {
+                    else if (params.DEPLOY_MODE == 'aws') {
 
-    echo "🚀 AWS DEPLOY STARTED (EC2 AUTO MODE)"
+                        echo "AWS DEPLOY STARTED"
 
-    sh '''
-        set -e
+                        sh '''
+                            set -e
 
-        echo "[AWS] Creating Security Group..."
+                            SG_ID=$(aws ec2 create-security-group \
+                                --group-name fyp-sg-${APP_ID} \
+                                --description "FYP SG" \
+                                --query GroupId --output text)
 
-        SG_ID=$(aws ec2 create-security-group \
-            --group-name fyp-sg-${APP_ID} \
-            --description "FYP security group" \
-            --query 'GroupId' \
-            --output text)
+                            aws ec2 authorize-security-group-ingress \
+                                --group-id $SG_ID \
+                                --protocol tcp --port 22 --cidr 0.0.0.0/0
 
-        aws ec2 authorize-security-group-ingress \
-            --group-id $SG_ID \
-            --protocol tcp \
-            --port 22 \
-            --cidr 0.0.0.0/0
+                            aws ec2 authorize-security-group-ingress \
+                                --group-id $SG_ID \
+                                --protocol tcp --port 80 --cidr 0.0.0.0/0
 
-        aws ec2 authorize-security-group-ingress \
-            --group-id $SG_ID \
-            --protocol tcp \
-            --port 80 \
-            --cidr 0.0.0.0/0
+                            aws ec2 authorize-security-group-ingress \
+                                --group-id $SG_ID \
+                                --protocol tcp --port 3000 --cidr 0.0.0.0/0
 
-        echo "[AWS] Launching EC2 instance..."
+                            INSTANCE_ID=$(aws ec2 run-instances \
+                                --image-id ami-0c02fb55956c7d316 \
+                                --instance-type t2.micro \
+                                --security-group-ids $SG_ID \
+                                --user-data "$(base64 <<EOF
+#!/bin/bash
+apt update -y
+apt install docker.io -y
+systemctl start docker
+systemctl enable docker
 
-        INSTANCE_ID=$(aws ec2 run-instances \
-            --image-id ami-0c02fb55956c7d316 \
-            --instance-type t2.micro \
-            --key-name fyp-key \
-            --security-group-ids $SG_ID \
-            --query 'Instances[0].InstanceId' \
-            --output text)
-
-        echo "[AWS] Instance ID: $INSTANCE_ID"
-
-        aws ec2 wait instance-running --instance-ids $INSTANCE_ID
-
-        PUBLIC_IP=$(aws ec2 describe-instances \
-            --instance-ids $INSTANCE_ID \
-            --query 'Reservations[0].Instances[0].PublicIpAddress' \
-            --output text)
-
-        echo "[AWS] Public IP: $PUBLIC_IP"
-
-        echo "[AWS] Installing Docker via SSH..."
-
-        ssh -o StrictHostKeyChecking=no -i /var/lib/jenkins/fyp-key.pem ubuntu@$PUBLIC_IP << EOF
-            sudo apt update -y
-            sudo apt install docker.io -y
-            sudo systemctl start docker
-            sudo systemctl enable docker
-
-            sudo docker pull ${IMAGE_NAME}
-
-            sudo docker run -d -p 80:3000 ${IMAGE_NAME}
+docker pull ${IMAGE_NAME}
+docker run -d -p 80:3000 ${IMAGE_NAME}
 EOF
+)" \
+                                --query Instances[0].InstanceId \
+                                --output text)
 
-        echo "[META] AWS_DEPLOYED_URL=http://$PUBLIC_IP"
-        echo "[META] DEPLOYMENT=AWS_SUCCESS"
-    '''
-}
+                            aws ec2 wait instance-running --instance-ids $INSTANCE_ID
+
+                            PUBLIC_IP=$(aws ec2 describe-instances \
+                                --instance-ids $INSTANCE_ID \
+                                --query Reservations[0].Instances[0].PublicIpAddress \
+                                --output text)
+
+                            echo "[META] URL=http://$PUBLIC_IP"
+                        '''
+                    }
+
                     echo '[STAGE_SUCCESS] Deploy'
                 }
             }
