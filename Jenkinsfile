@@ -184,10 +184,20 @@ stage('Push to DockerHub') {
 
             echo "$DOCKERHUB_CRED_PSW" | docker login -u "$DOCKERHUB_CRED_USR" --password-stdin
 
-            # Improve push stability + visibility
-            export DOCKER_BUILDKIT=1
+            n=1
+            until [ "$n" -gt 3 ]
+            do
+                docker push "${IMAGE_NAME}" && break
 
-            docker push --progress=plain "${IMAGE_NAME}"
+                echo "Docker push failed / stalled... retrying ($n/3)"
+                n=$((n+1))
+                sleep 10
+            done
+
+            if [ "$n" -gt 3 ]; then
+                echo "Docker push failed after 3 attempts"
+                exit 1
+            fi
 
             docker logout
         '''
