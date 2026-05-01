@@ -126,45 +126,39 @@ pipeline {
             }
         }
 
-        stage('Create Dockerfile') {
-            steps {
-                script {
-                    echo '[STAGE_START] Create Dockerfile'
+     stage('Create Dockerfile') {
+    steps {
+        script {
+            echo '[STAGE_START] Create Dockerfile'
 
-                    def df = ''
+            def df = '''
+FROM node:20-alpine
 
-                    if (env.STACK == 'react') {
-                        df = '''
-FROM node:20-alpine
 WORKDIR /app
-COPY . .
-RUN npm install
-RUN npm run build
-RUN npm install -g serve
-EXPOSE 3000
-ENV HOST=0.0.0.0
-CMD ["serve","-s","build","-l","3000"]
-'''
-                    } else {
-                        df = '''
-FROM node:20-alpine
-WORKDIR /app
+
 COPY package*.json ./
 RUN npm install
+
 COPY . .
+
+RUN npm run build
+
+RUN npm install -g serve
+
 EXPOSE 3000
+
 ENV HOST=0.0.0.0
 ENV PORT=3000
-CMD ["npm","start"]
+
+CMD ["serve", "-s", "dist", "-l", "tcp://0.0.0.0:3000"]
 '''
-                    }
 
-                    writeFile file: "app/Dockerfile", text: df
+            writeFile file: "app/Dockerfile", text: df
 
-                    echo '[STAGE_SUCCESS] Create Dockerfile'
-                }
-            }
+            echo '[STAGE_SUCCESS] Create Dockerfile'
         }
+    }
+}
 
         stage('Build Image') {
             steps {
