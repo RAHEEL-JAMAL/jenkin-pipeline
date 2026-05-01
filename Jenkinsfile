@@ -134,27 +134,15 @@ stage('Create Dockerfile') {
 
             def df = ''
 
-            // =========================
-            // SAFE STACK DETECTION
-            // =========================
-            def isReact = fileExists('app/package.json') &&
-                         readFile('app/package.json').contains('"react"')
+            // Detect React / Vite frontend
+            if (fileExists('app/package.json')) {
 
-            def isNext = fileExists('app/package.json') &&
-                        readFile('app/package.json').contains('"next"')
+                def pkg = readFile('app/package.json')
 
-            def isNode = fileExists('app/package.json')
+                // React / Vite
+                if (fileExists('app/src')) {
 
-            def isPython = fileExists('app/requirements.txt')
-            def isJava = fileExists('app/pom.xml')
-            def isStatic = fileExists('app/index.html')
-
-            // =========================
-            // REACT / VITE
-            // =========================
-            if (isReact) {
-
-                df = """
+                    df = '''
 FROM node:20-alpine
 
 WORKDIR /app
@@ -169,17 +157,14 @@ RUN npm run build
 RUN npm install -g serve
 
 EXPOSE 3000
+CMD ["serve", "-s", "dist", "-l", "3000"]
+'''
 
-CMD ["serve", "-s", "build", "-l", "3000"]
-"""
-            }
+                }
+                // Next.js
+                else if (pkg.contains('"next"')) {
 
-            // =========================
-            // NEXT.JS
-            // =========================
-            else if (isNext) {
-
-                df = """
+                    df = '''
 FROM node:20-alpine
 
 WORKDIR /app
@@ -192,17 +177,13 @@ COPY . .
 RUN npm run build
 
 EXPOSE 3000
-
 CMD ["npm", "start"]
-"""
-            }
+'''
+                }
+                // Normal Node backend / API
+                else {
 
-            // =========================
-            // NODE BACKEND
-            // =========================
-            else if (isNode) {
-
-                df = """
+                    df = '''
 FROM node:20-alpine
 
 WORKDIR /app
@@ -213,15 +194,13 @@ RUN npm install
 COPY . .
 
 EXPOSE 3000
-
 CMD ["npm", "start"]
-"""
+'''
+                }
             }
 
-            // =========================
-            // PYTHON
-            // =========================
-            else if (isPython) {
+            // Python apps
+            else if (fileExists('app/requirements.txt')) {
 
                 def runCmd = fileExists('app/manage.py')
                     ? 'python manage.py runserver 0.0.0.0:3000'
@@ -238,17 +217,23 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY . .
 
 EXPOSE 3000
-
 CMD ["sh", "-c", "${runCmd}"]
 """
             }
 
-            // =========================
-            // JAVA
-            // =========================
-            else if (isJava) {
+            // PHP
+            else if (fileExists('app/index.php')) {
+                df = '''
+FROM php:8.2-apache
+WORKDIR /var/www/html
+COPY . /var/www/html
+EXPOSE 80
+'''
+            }
 
-                df = """
+            // Java Maven
+            else if (fileExists('app/pom.xml')) {
+                df = '''
 FROM maven:3.9-eclipse-temurin-17 AS build
 
 WORKDIR /app
@@ -256,37 +241,27 @@ COPY . .
 RUN mvn clean package -DskipTests
 
 FROM eclipse-temurin:17-jre
-
 WORKDIR /app
 COPY --from=build /app/target/*.jar app.jar
 
 EXPOSE 3000
-
 CMD ["java", "-jar", "app.jar"]
-"""
+'''
             }
 
-            // =========================
-            // STATIC
-            // =========================
-            else if (isStatic) {
-
-                df = """
+            // Static HTML
+            else if (fileExists('app/index.html')) {
+                df = '''
 FROM nginx:alpine
-
 COPY . /usr/share/nginx/html
-
 EXPOSE 80
-"""
+'''
             }
 
             else {
-                error("❌ No supported stack detected")
+                error("Unsupported project type - cannot detect stack")
             }
 
-            // =========================
-            // 🔥 IMPORTANT FIX HERE
-            // =========================
             writeFile file: "app/Dockerfile", text: df
 
             echo '[STAGE_SUCCESS] Create Dockerfile'
