@@ -127,36 +127,34 @@ pipeline {
                 script { echo '[STAGE_SUCCESS] Dependency Audit' }
             }
         }
-
-      stage('Create Dockerfile') {
+stage('Create Dockerfile') {
     steps {
         script {
             echo '[STAGE_START] Create Dockerfile'
 
             def df = ''
-            def appDir = "app"
-
-            // 🔍 Safe directory detection (NO guessing frontend/backend blindly)
-            if (fileExists('app/frontend/package.json')) {
-                appDir = "app/frontend"
-            } else if (fileExists('app/client/package.json')) {
-                appDir = "app/client"
-            } else {
-                appDir = "app"
-            }
-
-            echo "[DEBUG] Using appDir = ${appDir}"
 
             // =========================
-            // 🟢 REACT / VITE / FRONTEND
+            // SAFE STACK DETECTION
             // =========================
-            if (fileExists("${appDir}/package.json")) {
+            def isReact = fileExists('app/package.json') &&
+                         readFile('app/package.json').contains('"react"')
 
-                def pkg = readFile("${appDir}/package.json")
+            def isNext = fileExists('app/package.json') &&
+                        readFile('app/package.json').contains('"next"')
 
-                if (pkg.contains('"react"') || pkg.contains('"vite"')) {
+            def isNode = fileExists('app/package.json')
 
-                    df = """
+            def isPython = fileExists('app/requirements.txt')
+            def isJava = fileExists('app/pom.xml')
+            def isStatic = fileExists('app/index.html')
+
+            // =========================
+            // REACT / VITE
+            // =========================
+            if (isReact) {
+
+                df = """
 FROM node:20-alpine
 
 WORKDIR /app
@@ -174,14 +172,14 @@ EXPOSE 3000
 
 CMD ["serve", "-s", "build", "-l", "3000"]
 """
-                }
+            }
 
-                // =========================
-                // 🟡 NEXT.JS
-                // =========================
-                else if (pkg.contains('"next"')) {
+            // =========================
+            // NEXT.JS
+            // =========================
+            else if (isNext) {
 
-                    df = """
+                df = """
 FROM node:20-alpine
 
 WORKDIR /app
@@ -197,14 +195,14 @@ EXPOSE 3000
 
 CMD ["npm", "start"]
 """
-                }
+            }
 
-                // =========================
-                // 🟠 NODE / EXPRESS BACKEND
-                // =========================
-                else {
+            // =========================
+            // NODE BACKEND
+            // =========================
+            else if (isNode) {
 
-                    df = """
+                df = """
 FROM node:20-alpine
 
 WORKDIR /app
@@ -218,15 +216,14 @@ EXPOSE 3000
 
 CMD ["npm", "start"]
 """
-                }
             }
 
             // =========================
-            // 🐍 PYTHON (DJANGO / FLASK)
+            // PYTHON
             // =========================
-            else if (fileExists("${appDir}/requirements.txt")) {
+            else if (isPython) {
 
-                def runCmd = fileExists("${appDir}/manage.py")
+                def runCmd = fileExists('app/manage.py')
                     ? 'python manage.py runserver 0.0.0.0:3000'
                     : 'python app.py'
 
@@ -247,9 +244,9 @@ CMD ["sh", "-c", "${runCmd}"]
             }
 
             // =========================
-            // ☕ JAVA (MAVEN)
+            // JAVA
             // =========================
-            else if (fileExists('app/pom.xml')) {
+            else if (isJava) {
 
                 df = """
 FROM maven:3.9-eclipse-temurin-17 AS build
@@ -270,9 +267,9 @@ CMD ["java", "-jar", "app.jar"]
             }
 
             // =========================
-            // 🌐 STATIC HTML
+            // STATIC
             // =========================
-            else if (fileExists('app/index.html')) {
+            else if (isStatic) {
 
                 df = """
 FROM nginx:alpine
@@ -283,20 +280,20 @@ EXPOSE 80
 """
             }
 
-            // =========================
-            // ❌ FALLBACK ERROR
-            // =========================
             else {
-                error("❌ Unsupported project type - no valid stack detected")
+                error("❌ No supported stack detected")
             }
 
-            // 📝 IMPORTANT: write Dockerfile INSIDE correct folder
-            writeFile file: "${appDir}/Dockerfile", text: df
+            // =========================
+            // 🔥 IMPORTANT FIX HERE
+            // =========================
+            writeFile file: "app/Dockerfile", text: df
 
-            echo "[STAGE_SUCCESS] Create Dockerfile"
+            echo '[STAGE_SUCCESS] Create Dockerfile'
         }
     }
 }
+  
         stage('Build Image') {
             steps {
                 script { echo '[STAGE_START] Build Image' }
