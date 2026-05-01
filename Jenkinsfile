@@ -129,25 +129,38 @@ pipeline {
         }
 
         stage('Create Dockerfile') {
-            steps {
-                script {
-                    echo '[STAGE_START] Create Dockerfile'
+    steps {
+        script {
+            echo '[STAGE_START] Create Dockerfile'
 
-                    // ✅ FIX: detect real app directory (monorepo support)
-                    def appDir = "app"
+            // ================================
+            // 🔥 FIX 1: smarter monorepo detection
+            // ================================
+            def appDir = "app"
 
-                    if (fileExists('app/frontend/package.json')) {
-                        appDir = "app/frontend"
-                    } else if (fileExists('app/client/package.json')) {
-                        appDir = "app/client"
-                    }
+            if (fileExists('app/frontend/package.json')) {
+                appDir = "app/frontend"
+            } else if (fileExists('app/client/package.json')) {
+                appDir = "app/client"
+            } else if (fileExists('app/frontend/src')) {
+                appDir = "app/frontend"
+            } else if (fileExists('app/client/src')) {
+                appDir = "app/client"
+            }
 
-                    def df = ''
+            echo "[DEBUG] Using appDir = ${appDir}"
 
-                    // React / Vite
-                    if (fileExists("${appDir}/package.json") && fileExists("${appDir}/src")) {
-                        df = """
+            def df = ''
+
+            // ================================
+            // React / Vite / SPA
+            // ================================
+            if (fileExists("${appDir}/package.json") &&
+                (fileExists("${appDir}/src") || fileExists("${appDir}/vite.config.js"))) {
+
+                df = """
 FROM node:20-alpine
+
 WORKDIR /app
 
 COPY package*.json ./
@@ -161,12 +174,16 @@ RUN npm install -g serve
 EXPOSE 3000
 CMD ["serve", "-s", "dist", "-l", "3000"]
 """
-                    }
+            }
 
-                    // Next.js
-                    else if (fileExists("${appDir}/next.config.js")) {
-                        df = """
+            // ================================
+            // Next.js
+            // ================================
+            else if (fileExists("${appDir}/next.config.js")) {
+
+                df = """
 FROM node:20-alpine
+
 WORKDIR /app
 
 COPY package*.json ./
@@ -178,12 +195,16 @@ RUN npm run build
 EXPOSE 3000
 CMD ["npm", "start"]
 """
-                    }
+            }
 
-                    // Node backend
-                    else if (fileExists("${appDir}/package.json")) {
-                        df = """
+            // ================================
+            // Node / Express backend
+            // ================================
+            else if (fileExists("${appDir}/package.json")) {
+
+                df = """
 FROM node:20-alpine
+
 WORKDIR /app
 
 COPY package*.json ./
@@ -194,16 +215,20 @@ COPY . .
 EXPOSE 3000
 CMD ["npm", "start"]
 """
-                    }
+            }
 
-                    // Python
-                    else if (fileExists('app/requirements.txt')) {
-                        def runCmd = fileExists('app/manage.py')
-                            ? 'python manage.py migrate && python manage.py runserver 0.0.0.0:3000'
-                            : 'python app.py'
+            // ================================
+            // Python
+            // ================================
+            else if (fileExists('app/requirements.txt')) {
 
-                        df = """
+                def runCmd = fileExists('app/manage.py')
+                    ? 'python manage.py migrate && python manage.py runserver 0.0.0.0:3000'
+                    : 'python app.py'
+
+                df = """
 FROM python:3.11-slim
+
 WORKDIR /app
 
 COPY requirements.txt .
@@ -214,54 +239,70 @@ COPY . .
 EXPOSE 3000
 CMD ["sh", "-c", "${runCmd}"]
 """
-                    }
+            }
 
-                    // PHP
-                    else if (fileExists('app/index.php')) {
-                        df = """
+            // ================================
+            // PHP
+            // ================================
+            else if (fileExists('app/index.php')) {
+
+                df = """
 FROM php:8.2-apache
+
 WORKDIR /var/www/html
+
 COPY . /var/www/html
+
 EXPOSE 80
 """
-                    }
+            }
 
-                    // Java Maven
-                    else if (fileExists('app/pom.xml')) {
-                        df = """
+            // ================================
+            // Java Maven
+            // ================================
+            else if (fileExists('app/pom.xml')) {
+
+                df = """
 FROM maven:3.9-eclipse-temurin-17 AS build
+
 WORKDIR /app
 COPY . .
 RUN mvn clean package -DskipTests
 
 FROM eclipse-temurin:17-jre
+
 WORKDIR /app
 COPY --from=build /app/target/*.jar app.jar
 
 EXPOSE 3000
 CMD ["java", "-jar", "app.jar"]
 """
-                    }
+            }
 
-                    // Static HTML
-                    else if (fileExists('app/index.html')) {
-                        df = """
+            // ================================
+            // Static HTML
+            // ================================
+            else if (fileExists('app/index.html')) {
+
+                df = """
 FROM nginx:alpine
+
 COPY . /usr/share/nginx/html
+
 EXPOSE 80
 """
-                    }
-
-                    else {
-                        error("Unsupported project type - cannot detect stack")
-                    }
-
-                    writeFile file: "app/Dockerfile", text: df
-
-                    echo '[STAGE_SUCCESS] Create Dockerfile'
-                }
             }
+
+            else {
+                error("Unsupported project type - cannot detect stack safely")
+            }
+
+            writeFile file: "app/Dockerfile", text: df
+
+            echo '[STAGE_SUCCESS] Create Dockerfile'
         }
+    }
+}
 
         stage('Build Image') {
             steps {
