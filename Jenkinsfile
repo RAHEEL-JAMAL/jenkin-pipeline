@@ -131,22 +131,33 @@ pipeline {
                 script {
                     echo '[STAGE_START] Create Dockerfile'
 
-                    def df = '''
+                    def df = ''
+
+                    if (env.STACK == 'react') {
+                        df = '''
 FROM node:20-alpine
 WORKDIR /app
-
+COPY . .
+RUN npm install
+RUN npm run build
+RUN npm install -g serve
+EXPOSE 3000
+ENV HOST=0.0.0.0
+CMD ["serve","-s","build","-l","3000"]
+'''
+                    } else {
+                        df = '''
+FROM node:20-alpine
+WORKDIR /app
 COPY package*.json ./
 RUN npm install
-
 COPY . .
-
 EXPOSE 3000
-
 ENV HOST=0.0.0.0
 ENV PORT=3000
-
-CMD ["node","index.js"]
+CMD ["npm","start"]
 '''
+                    }
 
                     writeFile file: "app/Dockerfile", text: df
 
@@ -198,8 +209,8 @@ CMD ["node","index.js"]
 
                             docker run -d --name ${CONTAINER_NAME} \
                             -p ${PORT}:3000 \
-                            -e PORT=3000 \
                             -e HOST=0.0.0.0 \
+                            -e PORT=3000 \
                             --restart unless-stopped \
                             ${IMAGE_NAME}
                         """
@@ -269,7 +280,10 @@ EOF
         stage('Verify') {
             steps {
                 script { echo '[STAGE_START] Verify' }
-                sh 'echo "checking container..."'
+                sh '''
+                    echo "checking container..."
+                    docker logs ${CONTAINER_NAME} --tail 20 || true
+                '''
                 script { echo '[STAGE_SUCCESS] Verify' }
             }
         }
