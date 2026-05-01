@@ -131,7 +131,31 @@ pipeline {
         script {
             echo '[STAGE_START] Create Dockerfile'
 
-            def df = '''
+            def df = ''
+
+            // React / Vite / Frontend SPA
+            if (fileExists('app/package.json') && fileExists('app/src')) {
+                df = '''
+FROM node:20-alpine
+
+WORKDIR /app
+
+COPY package*.json ./
+RUN npm install
+
+COPY . .
+
+RUN npm run build
+RUN npm install -g serve
+
+EXPOSE 3000
+CMD ["serve", "-s", "dist", "-l", "3000"]
+'''
+            }
+
+            // Next.js
+            else if (fileExists('app/package.json') && fileExists('app/next.config.js')) {
+                df = '''
 FROM node:20-alpine
 
 WORKDIR /app
@@ -143,15 +167,111 @@ COPY . .
 
 RUN npm run build
 
-RUN npm install -g serve
+EXPOSE 3000
+CMD ["npm", "start"]
+'''
+            }
+
+            // Node / Express backend
+            else if (fileExists('app/package.json')) {
+                df = '''
+FROM node:20-alpine
+
+WORKDIR /app
+
+COPY package*.json ./
+RUN npm install
+
+COPY . .
 
 EXPOSE 3000
-
-ENV HOST=0.0.0.0
-ENV PORT=3000
-
-CMD ["serve", "-s", "dist", "-l", "tcp://0.0.0.0:3000"]
+CMD ["npm", "start"]
 '''
+            }
+
+            // Python (Django / Flask / FastAPI)
+            else if (fileExists('app/requirements.txt')) {
+                def runCmd = fileExists('app/manage.py')
+                    ? 'python manage.py migrate && python manage.py runserver 0.0.0.0:3000'
+                    : 'python app.py'
+
+                df = """
+FROM python:3.11-slim
+
+WORKDIR /app
+
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+COPY . .
+
+EXPOSE 3000
+CMD ["sh", "-c", "${runCmd}"]
+"""
+            }
+
+            // PHP
+            else if (fileExists('app/index.php')) {
+                df = '''
+FROM php:8.2-apache
+
+WORKDIR /var/www/html
+COPY . /var/www/html
+
+EXPOSE 80
+'''
+            }
+
+            // Java Maven
+            else if (fileExists('app/pom.xml')) {
+                df = '''
+FROM maven:3.9-eclipse-temurin-17 AS build
+
+WORKDIR /app
+COPY . .
+RUN mvn clean package -DskipTests
+
+FROM eclipse-temurin:17-jre
+WORKDIR /app
+COPY --from=build /app/target/*.jar app.jar
+
+EXPOSE 3000
+CMD ["java", "-jar", "app.jar"]
+'''
+            }
+
+            // Java Gradle
+            else if (fileExists('app/build.gradle') || fileExists('app/build.gradle.kts')) {
+                df = '''
+FROM gradle:8.7-jdk17 AS build
+
+WORKDIR /app
+COPY . .
+RUN gradle build -x test
+
+FROM eclipse-temurin:17-jre
+WORKDIR /app
+COPY --from=build /app/build/libs/*.jar app.jar
+
+EXPOSE 3000
+CMD ["java", "-jar", "app.jar"]
+'''
+            }
+
+            // Static HTML / CSS / JS
+            else if (fileExists('app/index.html')) {
+                df = '''
+FROM nginx:alpine
+COPY . /usr/share/nginx/html
+
+EXPOSE 80
+'''
+            }
+
+            // Unsupported
+            else {
+                error("Unsupported project type: no known stack files found")
+            }
 
             writeFile file: "app/Dockerfile", text: df
 
@@ -159,7 +279,6 @@ CMD ["serve", "-s", "dist", "-l", "tcp://0.0.0.0:3000"]
         }
     }
 }
-
         stage('Build Image') {
             steps {
                 script { echo '[STAGE_START] Build Image' }
