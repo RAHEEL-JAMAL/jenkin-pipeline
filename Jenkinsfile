@@ -175,19 +175,26 @@ CMD ["serve", "-s", "dist", "-l", "tcp://0.0.0.0:3000"]
                 script { echo '[STAGE_SUCCESS] Image Scan (Trivy)' }
             }
         }
+stage('Push to DockerHub') {
+    steps {
+        script { echo '[STAGE_START] Push to DockerHub' }
 
-        stage('Push to DockerHub') {
-            steps {
-                script { echo '[STAGE_START] Push to DockerHub' }
-                sh '''
-                    echo "${DOCKERHUB_CRED_PSW}" | docker login -u "${DOCKERHUB_CRED_USR}" --password-stdin
-                    docker push "${IMAGE_NAME}"
-                    docker logout
-                '''
-                script { echo '[STAGE_SUCCESS] Push to DockerHub' }
-            }
-        }
+        sh '''
+            set -e
 
+            echo "$DOCKERHUB_CRED_PSW" | docker login -u "$DOCKERHUB_CRED_USR" --password-stdin
+
+            # Improve push stability + visibility
+            export DOCKER_BUILDKIT=1
+
+            docker push --progress=plain "${IMAGE_NAME}"
+
+            docker logout
+        '''
+
+        script { echo '[STAGE_SUCCESS] Push to DockerHub' }
+    }
+}
         stage('Deploy') {
             steps {
                 script {
