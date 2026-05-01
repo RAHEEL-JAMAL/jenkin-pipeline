@@ -100,25 +100,41 @@ pipeline {
             }
         }
 
-        stage('Detect Stack') {
-            steps {
-                script {
-                    echo '[STAGE_START] Detect Stack'
+       stage('Detect Stack') {
+    steps {
+        script {
+            echo '[STAGE_START] Detect Stack'
 
-                    def stack = 'node'
+            def stack = 'node'
+            def rootDir = 'app'
 
-                    if (fileExists('app/package.json')) {
-                        def pkg = readFile('app/package.json')
-                        if (pkg.contains('"react"')) stack = 'react'
-                        else if (pkg.contains('"next"')) stack = 'nextjs'
-                    }
+            if (fileExists('app/package.json')) {
+                def pkg = readFile('app/package.json')
 
-                    env.STACK = stack
-                    echo "[META] STACK=${env.STACK}"
-                    echo '[STAGE_SUCCESS] Detect Stack'
-                }
+                if (pkg.contains('"react"')) stack = 'react'
+                else if (pkg.contains('"next"')) stack = 'nextjs'
+                else stack = 'node'
             }
+            else if (fileExists('app/requirements.txt')) {
+                stack = 'python'
+            }
+            else if (fileExists('app/pom.xml')) {
+                stack = 'java'
+            }
+            else if (fileExists('app/index.html')) {
+                stack = 'static'
+            }
+
+            env.STACK = stack
+            env.ROOT_DIR = rootDir
+
+            echo "[META] STACK=${env.STACK}"
+            echo "[META] ROOT_DIR=${env.ROOT_DIR}"
+
+            echo '[STAGE_SUCCESS] Detect Stack'
         }
+    }
+}
 
         stage('Dependency Audit') {
             steps {
@@ -134,15 +150,10 @@ stage('Create Dockerfile') {
 
             def df = ''
 
-            // Detect React / Vite frontend
-            if (fileExists('app/package.json')) {
+            // React / Next / Node
+            if (env.STACK == 'react' || env.STACK == 'nextjs' || env.STACK == 'node') {
 
-                def pkg = readFile('app/package.json')
-
-                // React / Vite
-                if (fileExists('app/src')) {
-
-                    df = '''
+                df = '''
 FROM node:20-alpine
 
 WORKDIR /app
@@ -152,57 +163,17 @@ RUN npm install
 
 COPY . .
 
-RUN npm run build
-
-RUN npm install -g serve
-
-EXPOSE 3000
-CMD ["serve", "-s", "dist", "-l", "3000"]
-'''
-
-                }
-                // Next.js
-                else if (pkg.contains('"next"')) {
-
-                    df = '''
-FROM node:20-alpine
-
-WORKDIR /app
-
-COPY package*.json ./
-RUN npm install
-
-COPY . .
-
-RUN npm run build
+RUN npm run build || true
 
 EXPOSE 3000
 CMD ["npm", "start"]
 '''
-                }
-                // Normal Node backend / API
-                else {
-
-                    df = '''
-FROM node:20-alpine
-
-WORKDIR /app
-
-COPY package*.json ./
-RUN npm install
-
-COPY . .
-
-EXPOSE 3000
-CMD ["npm", "start"]
-'''
-                }
             }
 
-            // Python apps
-            else if (fileExists('app/requirements.txt')) {
+            // Python
+            else if (env.STACK == 'python') {
 
-                def runCmd = fileExists('app/manage.py')
+                def cmd = fileExists('app/manage.py')
                     ? 'python manage.py runserver 0.0.0.0:3000'
                     : 'python app.py'
 
@@ -211,31 +182,19 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-COPY requirements.txt .
+COPY . .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY . .
-
 EXPOSE 3000
-CMD ["sh", "-c", "${runCmd}"]
+CMD ["sh", "-c", "${cmd}"]
 """
             }
 
-            // PHP
-            else if (fileExists('app/index.php')) {
-                df = '''
-FROM php:8.2-apache
-WORKDIR /var/www/html
-COPY . /var/www/html
-EXPOSE 80
-'''
-            }
+            // Java
+            else if (env.STACK == 'java') {
 
-            // Java Maven
-            else if (fileExists('app/pom.xml')) {
                 df = '''
 FROM maven:3.9-eclipse-temurin-17 AS build
-
 WORKDIR /app
 COPY . .
 RUN mvn clean package -DskipTests
@@ -249,8 +208,9 @@ CMD ["java", "-jar", "app.jar"]
 '''
             }
 
-            // Static HTML
-            else if (fileExists('app/index.html')) {
+            // Static
+            else if (env.STACK == 'static') {
+
                 df = '''
 FROM nginx:alpine
 COPY . /usr/share/nginx/html
@@ -259,7 +219,7 @@ EXPOSE 80
             }
 
             else {
-                error("Unsupported project type - cannot detect stack")
+                error("Unsupported stack: ${env.STACK}")
             }
 
             writeFile file: "app/Dockerfile", text: df
@@ -268,15 +228,21 @@ EXPOSE 80
         }
     }
 }
-  
-        stage('Build Image') {
-            steps {
-                script { echo '[STAGE_START] Build Image' }
-                sh 'docker build -t "${IMAGE_NAME}" app'
-                script { echo '[STAGE_SUCCESS] Build Image' }
-            }
-        }
+       stage('Build Image') {
+    steps {
+        script {
+            echo '[STAGE_START] Build Image'
 
+            sh """
+                docker build \
+                -t ${IMAGE_NAME} \
+                app
+            """
+
+            echo '[STAGE_SUCCESS] Build Image'
+        }
+    }
+}
         stage('Image Scan (Trivy)') {
             steps {
                 script { echo '[STAGE_START] Image Scan (Trivy)' }
