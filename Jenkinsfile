@@ -80,12 +80,14 @@ pipeline {
         stage('Clone Repo') {
             steps {
                 script { echo '[STAGE_START] Clone Repo' }
+
                 retry(3) {
                     sh '''
                         rm -rf app
                         git clone --depth 1 "${REPO_URL}" app
                     '''
                 }
+
                 script { echo '[STAGE_SUCCESS] Clone Repo' }
             }
         }
@@ -126,18 +128,26 @@ pipeline {
             }
         }
 
-     stage('Create Dockerfile') {
-    steps {
-        script {
-            echo '[STAGE_START] Create Dockerfile'
+        stage('Create Dockerfile') {
+            steps {
+                script {
+                    echo '[STAGE_START] Create Dockerfile'
 
-            def df = ''
+                    // ✅ FIX: detect real app directory (monorepo support)
+                    def appDir = "app"
 
-            // React / Vite / Frontend SPA
-            if (fileExists('app/package.json') && fileExists('app/src')) {
-                df = '''
+                    if (fileExists('app/frontend/package.json')) {
+                        appDir = "app/frontend"
+                    } else if (fileExists('app/client/package.json')) {
+                        appDir = "app/client"
+                    }
+
+                    def df = ''
+
+                    // React / Vite
+                    if (fileExists("${appDir}/package.json") && fileExists("${appDir}/src")) {
+                        df = """
 FROM node:20-alpine
-
 WORKDIR /app
 
 COPY package*.json ./
@@ -150,33 +160,30 @@ RUN npm install -g serve
 
 EXPOSE 3000
 CMD ["serve", "-s", "dist", "-l", "3000"]
-'''
-            }
+"""
+                    }
 
-            // Next.js
-            else if (fileExists('app/package.json') && fileExists('app/next.config.js')) {
-                df = '''
+                    // Next.js
+                    else if (fileExists("${appDir}/next.config.js")) {
+                        df = """
 FROM node:20-alpine
-
 WORKDIR /app
 
 COPY package*.json ./
 RUN npm install
 
 COPY . .
-
 RUN npm run build
 
 EXPOSE 3000
 CMD ["npm", "start"]
-'''
-            }
+"""
+                    }
 
-            // Node / Express backend
-            else if (fileExists('app/package.json')) {
-                df = '''
+                    // Node backend
+                    else if (fileExists("${appDir}/package.json")) {
+                        df = """
 FROM node:20-alpine
-
 WORKDIR /app
 
 COPY package*.json ./
@@ -186,18 +193,17 @@ COPY . .
 
 EXPOSE 3000
 CMD ["npm", "start"]
-'''
-            }
+"""
+                    }
 
-            // Python (Django / Flask / FastAPI)
-            else if (fileExists('app/requirements.txt')) {
-                def runCmd = fileExists('app/manage.py')
-                    ? 'python manage.py migrate && python manage.py runserver 0.0.0.0:3000'
-                    : 'python app.py'
+                    // Python
+                    else if (fileExists('app/requirements.txt')) {
+                        def runCmd = fileExists('app/manage.py')
+                            ? 'python manage.py migrate && python manage.py runserver 0.0.0.0:3000'
+                            : 'python app.py'
 
-                df = """
+                        df = """
 FROM python:3.11-slim
-
 WORKDIR /app
 
 COPY requirements.txt .
@@ -208,25 +214,22 @@ COPY . .
 EXPOSE 3000
 CMD ["sh", "-c", "${runCmd}"]
 """
-            }
+                    }
 
-            // PHP
-            else if (fileExists('app/index.php')) {
-                df = '''
+                    // PHP
+                    else if (fileExists('app/index.php')) {
+                        df = """
 FROM php:8.2-apache
-
 WORKDIR /var/www/html
 COPY . /var/www/html
-
 EXPOSE 80
-'''
-            }
+"""
+                    }
 
-            // Java Maven
-            else if (fileExists('app/pom.xml')) {
-                df = '''
+                    // Java Maven
+                    else if (fileExists('app/pom.xml')) {
+                        df = """
 FROM maven:3.9-eclipse-temurin-17 AS build
-
 WORKDIR /app
 COPY . .
 RUN mvn clean package -DskipTests
@@ -237,48 +240,29 @@ COPY --from=build /app/target/*.jar app.jar
 
 EXPOSE 3000
 CMD ["java", "-jar", "app.jar"]
-'''
-            }
+"""
+                    }
 
-            // Java Gradle
-            else if (fileExists('app/build.gradle') || fileExists('app/build.gradle.kts')) {
-                df = '''
-FROM gradle:8.7-jdk17 AS build
-
-WORKDIR /app
-COPY . .
-RUN gradle build -x test
-
-FROM eclipse-temurin:17-jre
-WORKDIR /app
-COPY --from=build /app/build/libs/*.jar app.jar
-
-EXPOSE 3000
-CMD ["java", "-jar", "app.jar"]
-'''
-            }
-
-            // Static HTML / CSS / JS
-            else if (fileExists('app/index.html')) {
-                df = '''
+                    // Static HTML
+                    else if (fileExists('app/index.html')) {
+                        df = """
 FROM nginx:alpine
 COPY . /usr/share/nginx/html
-
 EXPOSE 80
-'''
+"""
+                    }
+
+                    else {
+                        error("Unsupported project type - cannot detect stack")
+                    }
+
+                    writeFile file: "app/Dockerfile", text: df
+
+                    echo '[STAGE_SUCCESS] Create Dockerfile'
+                }
             }
-
-            // Unsupported
-            else {
-                error("Unsupported project type: no known stack files found")
-            }
-
-            writeFile file: "app/Dockerfile", text: df
-
-            echo '[STAGE_SUCCESS] Create Dockerfile'
         }
-    }
-}
+
         stage('Build Image') {
             steps {
                 script { echo '[STAGE_START] Build Image' }
@@ -294,44 +278,39 @@ EXPOSE 80
                 script { echo '[STAGE_SUCCESS] Image Scan (Trivy)' }
             }
         }
-stage('Push to DockerHub') {
-    steps {
-        script { echo '[STAGE_START] Push to DockerHub' }
 
-        sh '''
-            set -e
+        stage('Push to DockerHub') {
+            steps {
+                script { echo '[STAGE_START] Push to DockerHub' }
 
-            echo "$DOCKERHUB_CRED_PSW" | docker login -u "$DOCKERHUB_CRED_USR" --password-stdin
+                sh '''
+                    set -e
 
-            n=1
-            until [ "$n" -gt 3 ]
-            do
-                docker push "${IMAGE_NAME}" && break
+                    echo "$DOCKERHUB_CRED_PSW" | docker login -u "$DOCKERHUB_CRED_USR" --password-stdin
 
-                echo "Docker push failed / stalled... retrying ($n/3)"
-                n=$((n+1))
-                sleep 10
-            done
+                    n=1
+                    until [ "$n" -gt 3 ]
+                    do
+                        docker push "${IMAGE_NAME}" && break
 
-            if [ "$n" -gt 3 ]; then
-                echo "Docker push failed after 3 attempts"
-                exit 1
-            fi
+                        echo "Docker push failed / retrying ($n/3)"
+                        n=$((n+1))
+                        sleep 10
+                    done
 
-            docker logout
-        '''
+                    docker logout
+                '''
 
-        script { echo '[STAGE_SUCCESS] Push to DockerHub' }
-    }
-}
+                script { echo '[STAGE_SUCCESS] Push to DockerHub' }
+            }
+        }
+
         stage('Deploy') {
             steps {
                 script {
                     echo "[STAGE_START] Deploy Mode = ${params.DEPLOY_MODE}"
 
                     if (params.DEPLOY_MODE == 'local') {
-
-                        echo "Deploying on LOCAL VM"
 
                         sh """
                             docker stop ${CONTAINER_NAME} || true
@@ -344,14 +323,9 @@ stage('Push to DockerHub') {
                             --restart unless-stopped \
                             ${IMAGE_NAME}
                         """
-
-                        echo "[META] DEPLOYMENT=LOCAL_SUCCESS"
-                        echo "[META] URL=http://localhost:${PORT}"
                     }
 
                     else if (params.DEPLOY_MODE == 'aws') {
-
-                        echo "AWS DEPLOY STARTED"
 
                         sh '''
                             set -e
@@ -360,18 +334,6 @@ stage('Push to DockerHub') {
                                 --group-name fyp-sg-${APP_ID} \
                                 --description "FYP SG" \
                                 --query GroupId --output text)
-
-                            aws ec2 authorize-security-group-ingress \
-                                --group-id $SG_ID \
-                                --protocol tcp --port 22 --cidr 0.0.0.0/0
-
-                            aws ec2 authorize-security-group-ingress \
-                                --group-id $SG_ID \
-                                --protocol tcp --port 80 --cidr 0.0.0.0/0
-
-                            aws ec2 authorize-security-group-ingress \
-                                --group-id $SG_ID \
-                                --protocol tcp --port 3000 --cidr 0.0.0.0/0
 
                             INSTANCE_ID=$(aws ec2 run-instances \
                                 --image-id ami-0c02fb55956c7d316 \
@@ -398,7 +360,7 @@ EOF
                                 --query Reservations[0].Instances[0].PublicIpAddress \
                                 --output text)
 
-                            echo "[META] URL=http://$PUBLIC_IP"
+                            echo "URL=http://$PUBLIC_IP"
                         '''
                     }
 
@@ -410,10 +372,7 @@ EOF
         stage('Verify') {
             steps {
                 script { echo '[STAGE_START] Verify' }
-                sh '''
-                    echo "checking container..."
-                    docker logs ${CONTAINER_NAME} --tail 20 || true
-                '''
+                sh 'docker logs ${CONTAINER_NAME} --tail 20 || true'
                 script { echo '[STAGE_SUCCESS] Verify' }
             }
         }
