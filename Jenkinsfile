@@ -128,37 +128,35 @@ pipeline {
             }
         }
 
-        stage('Create Dockerfile') {
+      stage('Create Dockerfile') {
     steps {
         script {
             echo '[STAGE_START] Create Dockerfile'
 
-            // ================================
-            // 🔥 FIX 1: smarter monorepo detection
-            // ================================
+            def df = ''
             def appDir = "app"
 
+            // 🔍 Safe directory detection (NO guessing frontend/backend blindly)
             if (fileExists('app/frontend/package.json')) {
                 appDir = "app/frontend"
             } else if (fileExists('app/client/package.json')) {
                 appDir = "app/client"
-            } else if (fileExists('app/frontend/src')) {
-                appDir = "app/frontend"
-            } else if (fileExists('app/client/src')) {
-                appDir = "app/client"
+            } else {
+                appDir = "app"
             }
 
             echo "[DEBUG] Using appDir = ${appDir}"
 
-            def df = ''
+            // =========================
+            // 🟢 REACT / VITE / FRONTEND
+            // =========================
+            if (fileExists("${appDir}/package.json")) {
 
-            // ================================
-            // React / Vite / SPA
-            // ================================
-            if (fileExists("${appDir}/package.json") &&
-                (fileExists("${appDir}/src") || fileExists("${appDir}/vite.config.js"))) {
+                def pkg = readFile("${appDir}/package.json")
 
-                df = """
+                if (pkg.contains('"react"') || pkg.contains('"vite"')) {
+
+                    df = """
 FROM node:20-alpine
 
 WORKDIR /app
@@ -169,19 +167,21 @@ RUN npm install
 COPY . .
 
 RUN npm run build
+
 RUN npm install -g serve
 
 EXPOSE 3000
-CMD ["serve", "-s", "dist", "-l", "3000"]
+
+CMD ["serve", "-s", "build", "-l", "3000"]
 """
-            }
+                }
 
-            // ================================
-            // Next.js
-            // ================================
-            else if (fileExists("${appDir}/next.config.js")) {
+                // =========================
+                // 🟡 NEXT.JS
+                // =========================
+                else if (pkg.contains('"next"')) {
 
-                df = """
+                    df = """
 FROM node:20-alpine
 
 WORKDIR /app
@@ -190,19 +190,21 @@ COPY package*.json ./
 RUN npm install
 
 COPY . .
+
 RUN npm run build
 
 EXPOSE 3000
+
 CMD ["npm", "start"]
 """
-            }
+                }
 
-            // ================================
-            // Node / Express backend
-            // ================================
-            else if (fileExists("${appDir}/package.json")) {
+                // =========================
+                // 🟠 NODE / EXPRESS BACKEND
+                // =========================
+                else {
 
-                df = """
+                    df = """
 FROM node:20-alpine
 
 WORKDIR /app
@@ -213,17 +215,19 @@ RUN npm install
 COPY . .
 
 EXPOSE 3000
+
 CMD ["npm", "start"]
 """
+                }
             }
 
-            // ================================
-            // Python
-            // ================================
-            else if (fileExists('app/requirements.txt')) {
+            // =========================
+            // 🐍 PYTHON (DJANGO / FLASK)
+            // =========================
+            else if (fileExists("${appDir}/requirements.txt")) {
 
-                def runCmd = fileExists('app/manage.py')
-                    ? 'python manage.py migrate && python manage.py runserver 0.0.0.0:3000'
+                def runCmd = fileExists("${appDir}/manage.py")
+                    ? 'python manage.py runserver 0.0.0.0:3000'
                     : 'python app.py'
 
                 df = """
@@ -237,29 +241,14 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY . .
 
 EXPOSE 3000
+
 CMD ["sh", "-c", "${runCmd}"]
 """
             }
 
-            // ================================
-            // PHP
-            // ================================
-            else if (fileExists('app/index.php')) {
-
-                df = """
-FROM php:8.2-apache
-
-WORKDIR /var/www/html
-
-COPY . /var/www/html
-
-EXPOSE 80
-"""
-            }
-
-            // ================================
-            // Java Maven
-            // ================================
+            // =========================
+            // ☕ JAVA (MAVEN)
+            // =========================
             else if (fileExists('app/pom.xml')) {
 
                 df = """
@@ -275,13 +264,14 @@ WORKDIR /app
 COPY --from=build /app/target/*.jar app.jar
 
 EXPOSE 3000
+
 CMD ["java", "-jar", "app.jar"]
 """
             }
 
-            // ================================
-            // Static HTML
-            // ================================
+            // =========================
+            // 🌐 STATIC HTML
+            // =========================
             else if (fileExists('app/index.html')) {
 
                 df = """
@@ -293,17 +283,20 @@ EXPOSE 80
 """
             }
 
+            // =========================
+            // ❌ FALLBACK ERROR
+            // =========================
             else {
-                error("Unsupported project type - cannot detect stack safely")
+                error("❌ Unsupported project type - no valid stack detected")
             }
 
-            writeFile file: "app/Dockerfile", text: df
+            // 📝 IMPORTANT: write Dockerfile INSIDE correct folder
+            writeFile file: "${appDir}/Dockerfile", text: df
 
-            echo '[STAGE_SUCCESS] Create Dockerfile'
+            echo "[STAGE_SUCCESS] Create Dockerfile"
         }
     }
 }
-
         stage('Build Image') {
             steps {
                 script { echo '[STAGE_START] Build Image' }
