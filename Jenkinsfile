@@ -150,27 +150,58 @@ stage('Create Dockerfile') {
 
             def df = ''
 
-            // React / Next / Node
-            if (env.STACK == 'react' || env.STACK == 'nextjs' || env.STACK == 'node') {
+            // =========================
+            // React / Vite / Frontend
+            // =========================
+            if (env.STACK == 'react' || env.STACK == 'nextjs') {
 
                 df = '''
-FROM node:20-alpine
+FROM node:22-alpine
 
 WORKDIR /app
 
 COPY package*.json ./
-RUN npm install
+RUN npm ci || npm install
 
 COPY . .
 
-RUN npm run build || true
+RUN npm run build
+
+RUN npm install -g serve
+
+# IMPORTANT: check build output exists
+RUN ls -la dist || true
 
 EXPOSE 3000
+
+CMD ["serve", "-s", "dist", "-l", "3000"]
+'''
+            }
+
+            // =========================
+            // Node backend
+            // =========================
+            else if (env.STACK == 'node') {
+
+                df = '''
+FROM node:22-alpine
+
+WORKDIR /app
+
+COPY package*.json ./
+RUN npm ci || npm install
+
+COPY . .
+
+EXPOSE 3000
+
 CMD ["npm", "start"]
 '''
             }
 
+            // =========================
             // Python
+            // =========================
             else if (env.STACK == 'python') {
 
                 def cmd = fileExists('app/manage.py')
@@ -183,14 +214,18 @@ FROM python:3.11-slim
 WORKDIR /app
 
 COPY . .
+
 RUN pip install --no-cache-dir -r requirements.txt
 
 EXPOSE 3000
+
 CMD ["sh", "-c", "${cmd}"]
 """
             }
 
+            // =========================
             // Java
+            // =========================
             else if (env.STACK == 'java') {
 
                 df = '''
@@ -204,11 +239,14 @@ WORKDIR /app
 COPY --from=build /app/target/*.jar app.jar
 
 EXPOSE 3000
+
 CMD ["java", "-jar", "app.jar"]
 '''
             }
 
-            // Static
+            // =========================
+            // Static HTML
+            // =========================
             else if (env.STACK == 'static') {
 
                 df = '''
