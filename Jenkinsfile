@@ -42,37 +42,35 @@ pipeline {
                 }
             }
         }
+stage('Allocate Safe Port') {
+    when { expression { params.DEPLOY_MODE == 'local' } }
+    steps {
+        script {
+            echo "=== ALLOCATE SAFE PORT ==="
 
-        stage('Allocate Safe Port') {
-            when { expression { params.DEPLOY_MODE == 'local' } }
-            steps {
-                script {
-                    def port = sh(
-                        script: '''
-python3 -c "
-import socket, sys
-for p in range(3000, 4001):
-    try:
-        s = socket.socket()
-        s.bind(('0.0.0.0', p))
-        s.close()
-        print(p)
-        sys.exit(0)
-    except:
-        pass
-print('NO_PORT')
-sys.exit(1)
-"
-                        ''',
-                        returnStdout: true
-                    ).trim()
+            def port = sh(
+                script: '''
+for p in $(seq 3000 4000); do
+    if ! ss -tuln | grep -q ":$p "; then
+        echo $p
+        exit 0
+    fi
+done
+echo NO_PORT
+exit 1
+''',
+                returnStdout: true
+            ).trim()
 
-                    if (port == 'NO_PORT') error("No free port found")
-
-                    env.ALLOCATED_PORT = port
-                }
+            if (port == 'NO_PORT') {
+                error("No free port found in range 3000-4000")
             }
+
+            env.ALLOCATED_PORT = port
+            echo "Allocated port: ${env.ALLOCATED_PORT}"
         }
+    }
+}
 
         stage('Clone Repo') {
             steps {
