@@ -345,16 +345,19 @@ EXPOSE ${s.port}
 CMD ["node", "${entry}"]
 """
 
-                            case 'django':
-                                return """FROM python:3.11-slim
+                         case 'django':
+    return """FROM python:3.11-slim
 WORKDIR /app
 COPY requirements*.txt ./
 RUN pip install --no-cache-dir -r requirements.txt gunicorn
 COPY . .
 RUN python manage.py collectstatic --noinput 2>/dev/null || true
 RUN find . -name wsgi.py | head -1 | sed 's|^./||' | sed 's|/wsgi.py||' | tr '/' '.' > /wsgi_module.txt
+RUN echo '#!/bin/sh' > /start.sh && \
+    echo 'gunicorn --bind 0.0.0.0:${s.port} --workers 3 $(cat /wsgi_module.txt).wsgi:application' >> /start.sh && \
+    chmod +x /start.sh
 EXPOSE ${s.port}
-CMD ["sh", "-c", "gunicorn --bind 0.0.0.0:${s.port} --workers 3 \\$(cat /wsgi_module.txt).wsgi:application"]
+CMD ["/start.sh"]
 """
 
                             case 'flask':
