@@ -435,7 +435,7 @@ CMD ["node", "${entry}"]
 """.stripIndent()
 
                     case 'django':
-                        return """
+    return """
 FROM python:3.11-slim
 WORKDIR /app
 COPY requirements*.txt ./
@@ -443,7 +443,7 @@ RUN pip install --no-cache-dir -r requirements.txt gunicorn
 COPY . .
 RUN python manage.py collectstatic --noinput 2>/dev/null || true
 EXPOSE ${s.port}
-CMD ["sh", "-c", "gunicorn --bind 0.0.0.0:${s.port} --workers 3 \\$(find . -name 'wsgi.py' | head -1 | xargs dirname | xargs basename).wsgi:application"]
+CMD ["sh", "-c", "gunicorn --bind 0.0.0.0:${s.port} --workers 3 \\$(find . -name wsgi.py | head -1 | sed 's#^./##' | sed 's#/wsgi.py##' | tr '/' '.').wsgi:application"]
 """.stripIndent()
 
                     case 'flask':
