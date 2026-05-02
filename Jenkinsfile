@@ -365,23 +365,23 @@ EOF
         // Generates Dockerfile per stack. Multi-stack = multi-stage or
         // docker-compose (written to WORK_DIR for reference).
         // ─────────────────────────────────────────────────────────────────
-       stage('Create Dockerfile') {
-    steps {
-        script {
-            echo "=== CREATE DOCKERFILE ==="
+        stage('Create Dockerfile') {
+            steps {
+                script {
+                    echo "=== CREATE DOCKERFILE ==="
 
-            def stacksRaw = env.STACKS_SERIALIZED.split('\\|').collect {
-                def p = it.split(':')
-                [type: p[0], dir: p[1], port: p[2]]
-            }
+                    def stacksRaw = env.STACKS_SERIALIZED.split('\\|').collect {
+                        def p = it.split(':')
+                        [type: p[0], dir: p[1], port: p[2]]
+                    }
 
-            // Helper closure: generate Dockerfile content per stack type
-            def generateDockerfile = { Map s ->
-                switch (s.type) {
+                    // Helper closure: generate Dockerfile content per stack type
+                    def generateDockerfile = { Map s ->
+                        switch (s.type) {
 
-                    case 'react':
-                    case 'vite':
-                        return """
+                            case 'react':
+                            case 'vite':
+                                return """
 FROM node:20-alpine AS builder
 WORKDIR /app
 COPY package*.json ./
@@ -396,8 +396,8 @@ EXPOSE 80
 CMD ["nginx", "-g", "daemon off;"]
 """.stripIndent()
 
-                    case 'nextjs':
-                        return """
+                            case 'nextjs':
+                                return """
 FROM node:20-alpine AS builder
 WORKDIR /app
 COPY package*.json ./
@@ -415,16 +415,16 @@ EXPOSE 3000
 CMD ["node", "server.js"]
 """.stripIndent()
 
-                    case 'node':
-                        def entry = sh(
-                            script: """
-                                cd ${s.dir}
-                                node -e "try{const p=require('./package.json');console.log(p.main||p.scripts&&(p.scripts.start||'').replace('node ','').trim()||'index.js')}catch(e){console.log('index.js')}" 2>/dev/null || echo 'index.js'
-                            """,
-                            returnStdout: true
-                        ).trim()
-
-                        return """
+                            case 'node':
+                                // Detect entry point
+                                def entry = sh(
+                                    script: """
+                                        cd ${s.dir}
+                                        node -e "try{const p=require('./package.json');console.log(p.main||p.scripts&&(p.scripts.start||'').replace('node ','').trim()||'index.js')}catch(e){console.log('index.js')}" 2>/dev/null || echo 'index.js'
+                                    """,
+                                    returnStdout: true
+                                ).trim()
+                                return """
 FROM node:20-alpine
 WORKDIR /app
 COPY package*.json ./
@@ -434,8 +434,8 @@ EXPOSE ${s.port}
 CMD ["node", "${entry}"]
 """.stripIndent()
 
-                    case 'django':
-    return """
+                            case 'django':
+                                return """
 FROM python:3.11-slim
 WORKDIR /app
 COPY requirements*.txt ./
@@ -443,11 +443,12 @@ RUN pip install --no-cache-dir -r requirements.txt gunicorn
 COPY . .
 RUN python manage.py collectstatic --noinput 2>/dev/null || true
 EXPOSE ${s.port}
-CMD ["sh", "-c", "gunicorn --bind 0.0.0.0:${s.port} --workers 3 \\$(find . -name wsgi.py | head -1 | sed 's#^./##' | sed 's#/wsgi.py##' | tr '/' '.').wsgi:application"]
+RUN find . -name wsgi.py | head -1 | sed 's|^./||' | sed 's|/wsgi.py||' | tr '/' '.' > /tmp/wsgi_module.txt
+CMD ["sh", "-c", "gunicorn --bind 0.0.0.0:${s.port} --workers 3 \$(cat /tmp/wsgi_module.txt).wsgi:application"]
 """.stripIndent()
 
-                    case 'flask':
-                        return """
+                            case 'flask':
+                                return """
 FROM python:3.11-slim
 WORKDIR /app
 COPY requirements*.txt ./
@@ -457,19 +458,19 @@ EXPOSE ${s.port}
 CMD ["gunicorn", "--bind", "0.0.0.0:${s.port}", "--workers", "3", "app:app"]
 """.stripIndent()
 
-                    case 'fastapi':
-                        return """
+                            case 'fastapi':
+                                return """
 FROM python:3.11-slim
 WORKDIR /app
 COPY requirements*.txt ./
-RUN pip install --no-cache-dir -r requirements.txt "uvicorn[standard]"
+RUN pip install --no-cache-dir -r requirements.txt uvicorn[standard]
 COPY . .
 EXPOSE ${s.port}
 CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "${s.port}"]
 """.stripIndent()
 
-                    case 'python':
-                        return """
+                            case 'python':
+                                return """
 FROM python:3.11-slim
 WORKDIR /app
 COPY requirements*.txt ./
@@ -479,8 +480,8 @@ EXPOSE ${s.port}
 CMD ["python", "main.py"]
 """.stripIndent()
 
-                    case 'laravel':
-                        return """
+                            case 'laravel':
+                                return """
 FROM php:8.2-fpm-alpine
 WORKDIR /var/www/html
 
@@ -506,8 +507,8 @@ EXPOSE ${s.port}
 CMD ["/usr/bin/supervisord", "-c", "/etc/supervisor/conf.d/supervisord.conf"]
 """.stripIndent()
 
-                    case 'php':
-                        return """
+                            case 'php':
+                                return """
 FROM php:8.2-apache
 WORKDIR /var/www/html
 RUN docker-php-ext-install pdo pdo_mysql mysqli
@@ -517,12 +518,11 @@ EXPOSE 80
 CMD ["apache2-foreground"]
 """.stripIndent()
 
-                    case 'java':
-                        def isMaven = sh(script: "test -f ${s.dir}/pom.xml && echo yes || echo no", returnStdout: true).trim()
-                        def buildCmd = isMaven == 'yes' ? 'mvn package -DskipTests' : './gradlew build -x test'
-                        def jarGlob  = isMaven == 'yes' ? 'target/*.jar' : 'build/libs/*.jar'
-
-                        return """
+                            case 'java':
+                                def isMaven = sh(script: "test -f ${s.dir}/pom.xml && echo yes || echo no", returnStdout: true).trim()
+                                def buildCmd = isMaven == 'yes' ? 'mvn package -DskipTests' : './gradlew build -x test'
+                                def jarGlob  = isMaven == 'yes' ? 'target/*.jar' : 'build/libs/*.jar'
+                                return """
 FROM maven:3.9-eclipse-temurin-17 AS builder
 WORKDIR /app
 COPY . .
@@ -535,16 +535,16 @@ EXPOSE ${s.port}
 ENTRYPOINT ["java", "-jar", "app.jar"]
 """.stripIndent()
 
-                    case 'static':
-                        return """
+                            case 'static':
+                                return """
 FROM nginx:alpine
 COPY . /usr/share/nginx/html
 EXPOSE 80
 CMD ["nginx", "-g", "daemon off;"]
 """.stripIndent()
 
-                    default:
-                        return """
+                            default:
+                                return """
 FROM node:20-alpine
 WORKDIR /app
 COPY . .
@@ -552,37 +552,33 @@ RUN test -f package.json && npm ci --legacy-peer-deps || true
 EXPOSE ${s.port}
 CMD ["sh", "-c", "npm start 2>/dev/null || node index.js 2>/dev/null || python main.py 2>/dev/null || echo 'No known entry point found'"]
 """.stripIndent()
-                }
-            }
+                        }
+                    }
 
-            if (stacksRaw.size() == 1) {
-                def content = generateDockerfile(stacksRaw[0])
-                def dfPath  = "${stacksRaw[0].dir}/Dockerfile"
+                    if (stacksRaw.size() == 1) {
+                        // ── Single stack ──────────────────────────────────
+                        def content = generateDockerfile(stacksRaw[0])
+                        def dfPath  = "${stacksRaw[0].dir}/Dockerfile"
+                        sh "cat > ${dfPath} << 'DOCKERFILE_EOF'\n${content}\nDOCKERFILE_EOF"
+                        env.DOCKERFILE_PATH = dfPath
+                        env.BUILD_CONTEXT   = stacksRaw[0].dir
+                        echo "Dockerfile written: ${dfPath}"
 
-                sh "cat > ${dfPath} << 'DOCKERFILE_EOF'\n${content}\nDOCKERFILE_EOF"
+                    } else {
+                        // ── Multi-stack: write docker-compose.yml ─────────
+                        echo "Multi-stack detected — generating docker-compose.yml"
+                        def compose = "version: '3.8'\nservices:\n"
 
-                env.DOCKERFILE_PATH = dfPath
-                env.BUILD_CONTEXT   = stacksRaw[0].dir
+                        stacksRaw.eachWithIndex { s, idx ->
+                            def svcName = idx == 0 ? params.APP_NAME : "${params.APP_NAME}-${s.type}-${idx}"
+                            def dfContent = generateDockerfile(s)
+                            def dfPath = "${s.dir}/Dockerfile"
+                            sh "cat > ${dfPath} << 'DOCKERFILE_EOF'\n${dfContent}\nDOCKERFILE_EOF"
 
-                echo "Dockerfile written: ${dfPath}"
+                            // Compute host port (primary uses ALLOCATED_PORT, others increment)
+                            def hostPort = idx == 0 ? (env.ALLOCATED_PORT ?: s.port) : (Integer.parseInt(env.ALLOCATED_PORT ?: s.port) + idx).toString()
 
-            } else {
-                echo "Multi-stack detected — generating docker-compose.yml"
-
-                def compose = "version: '3.8'\nservices:\n"
-
-                stacksRaw.eachWithIndex { s, idx ->
-                    def svcName   = idx == 0 ? params.APP_NAME : "${params.APP_NAME}-${s.type}-${idx}"
-                    def dfContent = generateDockerfile(s)
-                    def dfPath    = "${s.dir}/Dockerfile"
-
-                    sh "cat > ${dfPath} << 'DOCKERFILE_EOF'\n${dfContent}\nDOCKERFILE_EOF"
-
-                    def hostPort = idx == 0
-                        ? (env.ALLOCATED_PORT ?: s.port)
-                        : (Integer.parseInt(env.ALLOCATED_PORT ?: s.port) + idx).toString()
-
-                    compose += """\
+                            compose += """\
   ${svcName}:
     build:
       context: ${s.dir}
@@ -592,20 +588,22 @@ CMD ["sh", "-c", "npm start 2>/dev/null || node index.js 2>/dev/null || python m
       - "${hostPort}:${s.port}"
     restart: unless-stopped
 """
+                        }
+
+                        def composePath = "${WORK_DIR}/docker-compose.yml"
+                        sh "cat > ${composePath} << 'COMPOSE_EOF'\n${compose}\nCOMPOSE_EOF"
+                        env.COMPOSE_FILE = composePath
+
+                        // For image build we use primary stack only (each service builds its own)
+                        env.DOCKERFILE_PATH = "${stacksRaw[0].dir}/Dockerfile"
+                        env.BUILD_CONTEXT   = stacksRaw[0].dir
+
+                        echo "docker-compose.yml written: ${composePath}"
+                    }
                 }
-
-                def composePath = "${WORK_DIR}/docker-compose.yml"
-                sh "cat > ${composePath} << 'COMPOSE_EOF'\n${compose}\nCOMPOSE_EOF"
-
-                env.COMPOSE_FILE    = composePath
-                env.DOCKERFILE_PATH = "${stacksRaw[0].dir}/Dockerfile"
-                env.BUILD_CONTEXT   = stacksRaw[0].dir
-
-                echo "docker-compose.yml written: ${composePath}"
             }
         }
-    }
-}
+
         // ─────────────────────────────────────────────────────────────────
         // STAGE 9 — BUILD IMAGE(S)
         // ─────────────────────────────────────────────────────────────────
